@@ -1,11 +1,14 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
-import { CheckCircle2, XCircle, ClipboardList, Clock, Info } from "lucide-react";
+import { CheckCircle2, XCircle, ClipboardList, Clock, Info, Send, Trash2 } from "lucide-react";
 import { timeAgo } from "../data/mockData";
 
 const CONFIG = {
   approved: { Icon: CheckCircle2, classes: "bg-success/10 text-emerald-400" },
   rejected: { Icon: XCircle, classes: "bg-danger/10 text-red-400" },
+  submitted: { Icon: Send, classes: "bg-nexura-500/15 text-nexura-300" },
+  resubmitted: { Icon: Send, classes: "bg-nexura-500/15 text-nexura-300" },
+  removed: { Icon: Trash2, classes: "bg-danger/10 text-red-400" },
   task: { Icon: ClipboardList, classes: "bg-nexura-500/15 text-nexura-300" },
   pending: { Icon: Clock, classes: "bg-warning/10 text-amber-400" },
   reminder: { Icon: Clock, classes: "bg-warning/10 text-amber-400" },
