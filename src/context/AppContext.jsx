@@ -452,6 +452,12 @@ export function AppProvider({ children }) {
           try {
             if (session?.user) {
               await hydrateAuthFromUser(session.user);
+            } else if (event === "SIGNED_OUT") {
+              // Logout can also arrive as an auth event from another open tab
+              // (auth-js broadcasts across tabs). Clear React state so
+              // ProtectedRoute redirects to /login instead of leaving a ghost
+              // logged-in UI.
+              setAuth(null);
             }
             await syncLiveData();
           } catch (error) {
@@ -586,13 +592,16 @@ export function AppProvider({ children }) {
   );
 
   const logout = useCallback(async () => {
-    // Log out locally FIRST so the UI responds instantly, then clear the
-    // Supabase session in the background. Waiting on signOut() (as before)
-    // made logout hang whenever the auth request stalled on a flaky network,
+    // Log out locally FIRST so the UI responds instantly, then revoke the
+    // session in the background. Waiting on signOut() (as before) made
+    // logout hang whenever the auth request stalled on a flaky network,
     // leaving the user stuck on the dashboard.
     setAuth(null);
     try {
-      await supabase.auth.signOut();
+      // scope "global" revokes the refresh token server-side (POST
+      // /auth/v1/logout?scope=global), so the backend JWTs are actually
+      // invalidated — not just dropped from this browser's storage.
+      await supabase.auth.signOut({ scope: "global" });
     } catch (e) {
       console.warn("Sign out error:", e);
     }
