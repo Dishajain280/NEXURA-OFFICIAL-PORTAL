@@ -36,6 +36,23 @@ const isDbUuid = (value = "") =>
     String(value),
   );
 
+// Demo/local sessions have no real join date. Persist the first-seen date per
+// email so "Member since" stays stable across sessions instead of showing the
+// current date, which visibly churns day to day (e.g. Sept 30 -> Oct 1).
+const DEFAULT_JOINED = "2024-08-12";
+const getLocalJoinedDate = (email = "") => {
+  try {
+    const key = `nexura_local_joined:${String(email).toLowerCase()}`;
+    const existing = localStorage.getItem(key);
+    if (existing) return existing;
+    const today = new Date().toISOString().slice(0, 10);
+    localStorage.setItem(key, today);
+    return today;
+  } catch {
+    return DEFAULT_JOINED;
+  }
+};
+
 const normalizeTask = (row, fallbackStudentIds = []) => {
   const assigned =
     Array.isArray(row.assignedTo) && row.assignedTo.length > 0
@@ -554,7 +571,7 @@ export function AppProvider({ children }) {
         rollNo: "CS21B" + Math.floor(100 + Math.random() * 900),
         branch: "Computer Science",
         year: "1st Year",
-        joined: new Date().toISOString().slice(0, 10),
+        joined: getLocalJoinedDate(email),
       };
 
       if (role === "student") {
@@ -569,12 +586,16 @@ export function AppProvider({ children }) {
   );
 
   const logout = useCallback(async () => {
+    // Log out locally FIRST so the UI responds instantly, then clear the
+    // Supabase session in the background. Waiting on signOut() (as before)
+    // made logout hang whenever the auth request stalled on a flaky network,
+    // leaving the user stuck on the dashboard.
+    setAuth(null);
     try {
       await supabase.auth.signOut();
     } catch (e) {
       console.warn("Sign out error:", e);
     }
-    setAuth(null);
   }, []);
 
   const createTask = useCallback(
