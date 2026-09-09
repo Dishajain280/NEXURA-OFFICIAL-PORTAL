@@ -7,15 +7,12 @@ import {
   User as UserIcon,
   ArrowRight,
   GraduationCap,
-  ShieldCheck,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
-import { isCoordinatorRole } from "../../lib/roleGuard";
 
 export default function Signup() {
   const { signup, pushToast } = useApp();
   const navigate = useNavigate();
-  const [role, setRole] = useState("student");
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [errors, setErrors] = useState({});
 
@@ -36,16 +33,14 @@ export default function Signup() {
     if (Object.keys(errs).length > 0) return;
 
     try {
-      const data = await signup(form.name, form.email, form.password, role);
-      pushToast(
-        `Account created — welcome to Nexura, ${isCoordinatorRole(role) ? "Coordinator" : "member"}!`,
-      );
+      // Signup is strictly student-only — the DB trigger creates every new
+      // profile with role 'student', and coordinator accounts are provisioned
+      // by admins, never through public registration. Onboarding therefore
+      // always lands on the student portal.
+      const data = await signup(form.name, form.email, form.password, "student");
+      pushToast(`Account created — welcome to Nexura, member!`);
       if (data?.user) {
-        navigate(
-          isCoordinatorRole(role)
-            ? "/coordinator/dashboard"
-            : "/student/dashboard",
-        );
+        navigate("/student/dashboard");
       }
     } catch (error) {
       setErrors({ form: error.message || "Signup failed" });
@@ -70,36 +65,17 @@ export default function Signup() {
             Join Nexura
           </h1>
           <p className="text-sm text-nexura-300 text-center mt-1.5">
-            Create your {role === "coordinator" ? "coordinator" : "member"}{" "}
-            account to{" "}
-            {role === "coordinator"
-              ? "start managing tasks"
-              : "start receiving tasks"}
+            Create your member account to start receiving tasks
           </p>
 
-          <div className="grid grid-cols-2 gap-2 mt-6 p-1 rounded-xl bg-white/5 border border-white/10">
-            <button
-              type="button"
-              onClick={() => setRole("student")}
-              className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                role === "student"
-                  ? "bg-white text-nexura-700 shadow"
-                  : "text-nexura-200 hover:text-white"
-              }`}
-            >
+          <div className="flex items-center justify-center gap-2 mt-6 p-1 rounded-xl bg-white/5 border border-white/10">
+            <span className="flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold text-nexura-200">
               <GraduationCap className="w-4 h-4" /> Student
-            </button>
-            <button
-              type="button"
-              onClick={() => setRole("coordinator")}
-              className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                role === "coordinator"
-                  ? "bg-white text-nexura-700 shadow"
-                  : "text-nexura-200 hover:text-white"
-              }`}
-            >
-              <ShieldCheck className="w-4 h-4" /> Coordinator
-            </button>
+            </span>
+            <span className="text-xs text-nexura-400">
+              Coordinator accounts are provisioned by the team — contact the
+              faculty coordinator to get one.
+            </span>
           </div>
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4">
@@ -161,8 +137,7 @@ export default function Signup() {
             </div>
 
             <button type="submit" className="btn-primary w-full py-3 mt-2">
-              Create {role === "coordinator" ? "coordinator" : "member"} account{" "}
-              <ArrowRight className="w-4 h-4" />
+              Create member account <ArrowRight className="w-4 h-4" />
             </button>
           </form>
 

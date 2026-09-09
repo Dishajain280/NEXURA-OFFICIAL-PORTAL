@@ -92,4 +92,10 @@ const supabase =
       })
     : createNoopSupabase();
 
+// True when a real Supabase backend was configured at build time. When false,
+// the app runs the noop client (local demo mode) — auth calls cannot be
+// trusted to validate credentials, so callers must treat it as a dev-only
+// fallback and never grant privileged roles through it.
+export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+
 export default supabase;

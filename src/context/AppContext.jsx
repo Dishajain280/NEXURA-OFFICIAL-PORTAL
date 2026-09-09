@@ -15,7 +15,7 @@ import {
   getStudentById as getMockStudentById,
   getTaskById as getMockTaskById,
 } from "../data/mockData";
-import supabase from "../supabaseClient";
+import supabase, { isSupabaseConfigured } from "../supabaseClient";
 import {
   loginUser,
   signUpUser,
@@ -123,9 +123,10 @@ const safeSupabaseQuery = async (queryBuilder, fallback = { data: null }) => {
 };
 
 const buildAuthState = (user, profile) => {
-  const role = normalizeRole(
-    profile?.role || user?.user_metadata?.role || "student",
-  );
+  // The database profile is the single source of truth for the role. Never
+  // trust user_metadata.role — it is client-supplied at signup and could be
+  // forged to request coordinator access.
+  const role = normalizeRole(profile?.role || "student");
   return {
     role,
     user: {
@@ -483,10 +484,44 @@ export function AppProvider({ children }) {
 
   const login = useCallback(
     async (role, email, password) => {
+      const requestedRole = normalizeRole(role || "student");
+
       try {
+        // Strict credential verification: loginUser delegates to
+        // supabase.auth.signInWithPassword and throws the native Supabase
+        // error ("Invalid login credentials") when the password does not
+        // match — never a silent local login.
         const { user } = await loginUser(email, password);
+        if (!user?.id) throw new Error("Invalid login credentials");
+
+        // The database profile is the single source of truth for the role.
         const profile = await fetchCurrentProfile(user.id);
-        const effectiveRole = normalizeRole(profile?.role || role || "student");
+        const effectiveRole = normalizeRole(profile?.role || "student");
+
+        // Strict role gate: the account's database role must match the portal
+        // tab the user selected. On mismatch the session is revoked
+        // server-side and the login is rejected — a student picking the
+        // Coordinator tab gets "Access Denied" instead of being silently
+        // redirected (and vice versa).
+        if (requestedRole !== effectiveRole) {
+          try {
+            await supabase.auth.signOut({ scope: "global" });
+          } catch (signOutErr) {
+            console.warn(
+              "Session revocation after role mismatch failed:",
+              signOutErr,
+            );
+          }
+          const deniedMessage =
+            requestedRole === "coordinator"
+              ? "Access Denied: this account is registered as a student — you do not have coordinator access."
+              : "Access Denied: this account is a coordinator — use the coordinator portal.";
+          // Toast from the context (not the page) so the message survives the
+          // redirect bounce the revoked session causes.
+          pushToast(deniedMessage, "danger");
+          throw new Error(deniedMessage);
+        }
+
         const authState = buildAuthState(
           user,
           profile || { role: effectiveRole },
@@ -495,43 +530,41 @@ export function AppProvider({ children }) {
         await syncLiveData();
         return authState;
       } catch (err) {
-        const demoRole = normalizeRole(role || "student");
-        const demoUser =
-          demoRole === "coordinator"
-            ? {
-                id: "a1",
-                email,
-                name: "Prof. Sameer Rao",
-                role: "coordinator",
-                avatarColor: "#5B21B6",
-                rollNo: "FAC001",
-                branch: "Faculty",
-                year: "Faculty",
-                joined: "2023-01-01",
-              }
-            : {
-                id: "s1",
-                email,
-                name: email.split("@")[0]
-                  ? email.split("@")[0].replace(".", " ")
-                  : "Aarav Mehta",
-                role: "student",
-                avatarColor: "#7C3AED",
-                rollNo: "CS21B045",
-                branch: "Computer Science",
-                year: "3rd Year",
-                joined: "2024-08-12",
-              };
+        // Demo fallback ONLY when no real Supabase backend is configured
+        // (noop client — env vars missing at build time). With a real
+        // backend, every failure — wrong password, unknown email, network
+        // error — is rethrown so the login attempt is explicitly rejected.
+        if (!isSupabaseConfigured) {
+          if (requestedRole !== "student") {
+            throw new Error(
+              "Access Denied: local demo sessions are student-only. Coordinator access requires a database role.",
+            );
+          }
+          const demoUser = {
+            id: "s1",
+            email,
+            name: email.split("@")[0]
+              ? email.split("@")[0].replace(".", " ")
+              : "Aarav Mehta",
+            role: "student",
+            avatarColor: "#7C3AED",
+            rollNo: "CS21B045",
+            branch: "Computer Science",
+            year: "3rd Year",
+            joined: getLocalJoinedDate(email),
+          };
 
-        const authState = {
-          role: demoUser.role,
-          user: demoUser,
-        };
-        setAuth(authState);
-        return authState;
+          const authState = {
+            role: demoUser.role,
+            user: demoUser,
+          };
+          setAuth(authState);
+          return authState;
+        }
+        throw err;
       }
     },
-    [syncLiveData],
+    [pushToast, syncLiveData],
   );
 
   const signup = useCallback(
@@ -542,7 +575,10 @@ export function AppProvider({ children }) {
 
         if (user) {
           const profile = await fetchCurrentProfile(user.id);
-          const effectiveRole = profile?.role || role || "student";
+          // Strictly student by default: the DB trigger creates the profile
+          // with role 'student', and the role guard rejects anything else for
+          // non-admin signups. Never honor a requested role here.
+          const effectiveRole = profile?.role || "student";
 
           if (
             role === "coordinator" &&
@@ -550,7 +586,7 @@ export function AppProvider({ children }) {
             typeof pushToast === "function"
           ) {
             pushToast(
-              "Coordinator account created as student role by system default.",
+              "Coordinator accounts are not created via signup. You joined as a student.",
               "warning",
             );
           }
@@ -561,49 +597,80 @@ export function AppProvider({ children }) {
           );
           setAuth(authState);
           await syncLiveData();
-          return result;
+          return authState;
         }
       } catch (err) {
         console.warn("Supabase signup failed, creating local session:", err);
       }
 
-      const localId = `u_${Date.now()}`;
+      // Local fallback session: always a student. Same rule as login — the
+      // demo path must never mint a coordinator.
       const localUser = {
-        id: localId,
+        id: `u_${Date.now()}`,
         email,
         name,
-        role,
-        avatarColor: role === "coordinator" ? "#5B21B6" : "#7C3AED",
+        role: "student",
+        avatarColor: "#7C3AED",
         rollNo: "CS21B" + Math.floor(100 + Math.random() * 900),
         branch: "Computer Science",
         year: "1st Year",
         joined: getLocalJoinedDate(email),
       };
 
-      if (role === "student") {
-        setStudents((prev) => [localUser, ...prev]);
-      }
+      setStudents((prev) => [localUser, ...prev]);
 
-      const authState = { role, user: localUser };
+      const authState = { role: "student", user: localUser };
       setAuth(authState);
-      return { user: localUser };
+      return authState;
     },
     [pushToast, syncLiveData],
   );
 
   const logout = useCallback(async () => {
-    // Log out locally FIRST so the UI responds instantly, then revoke the
-    // session in the background. Waiting on signOut() (as before) made
-    // logout hang whenever the auth request stalled on a flaky network,
-    // leaving the user stuck on the dashboard.
+    // 1. Purge React auth state FIRST so the UI responds instantly and
+    //    ProtectedRoute redirects away regardless of network conditions.
+    //    Waiting on signOut() made logout hang whenever the auth request
+    //    stalled on a flaky network, leaving the user stuck on the dashboard.
     setAuth(null);
+
+    // 2. Revoke the session server-side. scope "global" calls
+    //    POST /auth/v1/logout?scope=global, which invalidates the refresh
+    //    token — backend JWTs are actually revoked, not just dropped from
+    //    this browser's storage.
     try {
-      // scope "global" revokes the refresh token server-side (POST
-      // /auth/v1/logout?scope=global), so the backend JWTs are actually
-      // invalidated — not just dropped from this browser's storage.
       await supabase.auth.signOut({ scope: "global" });
     } catch (e) {
-      console.warn("Sign out error:", e);
+      // Best-effort: if the network is down the local purge below still
+      // guarantees the user is signed out in this browser.
+      console.warn("Sign out error (local purge continues):", e);
+    }
+
+    // 3. Wipe app-owned browser storage: Supabase auth tokens ("sb-...")
+    //    and local demo keys ("nexura_..."). This is a targeted wipe, not
+    //    localStorage.clear(), so unrelated site data is preserved.
+    try {
+      const doomed = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith("sb-") || key.startsWith("nexura_"))) {
+          doomed.push(key);
+        }
+      }
+      doomed.forEach((k) => localStorage.removeItem(k));
+      sessionStorage.clear();
+    } catch (e) {
+      console.warn("Storage wipe failed:", e);
+    }
+
+    // 4. Full-page redirect to the root. A hard navigation (not a router
+    //    push) guarantees a fresh app bootstrap — no stale React state,
+    //    subscriptions, or in-memory data can survive in this tab, and any
+    //    pending framework work is discarded cleanly instead of crashing on
+    //    the unmounted tree.
+    try {
+      window.location.replace("/");
+    } catch (e) {
+      console.warn("Redirect failed:", e);
     }
   }, []);
 

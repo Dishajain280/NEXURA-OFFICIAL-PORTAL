@@ -100,6 +100,11 @@ begin
     if new.role not in ('student', 'admin', 'coordinator') then
       raise exception 'Invalid role';
     end if;
+    -- New accounts are always students; only an admin may bootstrap a
+    -- coordinator/admin profile directly.
+    if new.role <> 'student' and not public.is_admin() then
+      raise exception 'New profiles must start with the student role';
+    end if;
     if new.id is distinct from auth.uid() and not public.is_admin() then
       raise exception 'Profile creation is restricted to authenticated users';
     end if;
