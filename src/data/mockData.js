@@ -32,7 +32,7 @@ export const TASKS = [
       "Working contact form (client-side validation only)",
       "Deployed link (Vercel/Netlify/GitHub Pages)",
     ],
-    deadline: "2026-09-02",
+    deadline: "2026-09-25",
     createdAt: "2026-08-10",
     difficulty: "Intermediate",
     points: 100,
@@ -50,7 +50,7 @@ export const TASKS = [
       "README with setup instructions",
       "Postman/Insomnia collection exported to repo",
     ],
-    deadline: "2026-08-28",
+    deadline: "2026-09-20",
     createdAt: "2026-08-05",
     difficulty: "Advanced",
     points: 150,
@@ -68,7 +68,7 @@ export const TASKS = [
       "High-fidelity Figma prototype link",
       "Before/after comparison",
     ],
-    deadline: "2026-08-25",
+    deadline: "2026-09-18",
     createdAt: "2026-08-01",
     difficulty: "Beginner",
     points: 80,
@@ -86,7 +86,7 @@ export const TASKS = [
       "Resolved merge conflict",
       "Open pull request following template",
     ],
-    deadline: "2026-08-18",
+    deadline: "2026-09-30",
     createdAt: "2026-08-02",
     difficulty: "Beginner",
     points: 60,
@@ -104,7 +104,7 @@ export const TASKS = [
       "Step-by-step DFS animation",
       "Short write-up on time complexity",
     ],
-    deadline: "2026-09-10",
+    deadline: "2026-10-10",
     createdAt: "2026-08-15",
     difficulty: "Advanced",
     points: 150,
@@ -245,8 +245,8 @@ export const SUBMISSIONS = [
 export const NOTIFICATIONS_STUDENT = [
   { id: "n1", type: "approved", title: "Submission approved", message: "Your submission for 'UI/UX Case Study: Redesign a Campus App' was approved.", time: "2026-08-16T09:00:00", read: false, link: "/student/submissions/sub2" },
   { id: "n2", type: "rejected", title: "Changes requested", message: "Your submission for 'Git & GitHub Workflow Challenge' needs changes before it can be approved.", time: "2026-08-17T11:30:00", read: false, link: "/student/submissions/sub3" },
-  { id: "n3", type: "task", title: "New task assigned", message: "'Data Structures: Visualize a Graph Traversal' has been assigned to you. Due Sep 10.", time: "2026-08-15T09:00:00", read: true, link: "/student/tasks/t5" },
-  { id: "n4", type: "reminder", title: "Deadline approaching", message: "'Build a Responsive Portfolio Landing Page' is due in a few days.", time: "2026-08-28T09:00:00", read: true, link: "/student/tasks/t1" },
+  { id: "n3", type: "task", title: "New task assigned", message: "'Data Structures: Visualize a Graph Traversal' has been assigned to you. Due Oct 10.", time: "2026-08-15T09:00:00", read: true, link: "/student/tasks/t5" },
+  { id: "n4", type: "reminder", title: "Deadline approaching", message: "'Build a Responsive Portfolio Landing Page' is due on Sep 25.", time: "2026-08-28T09:00:00", read: true, link: "/student/tasks/t1" },
   { id: "n5", type: "pending", title: "Submission received", message: "We've received your submission for 'Implement a REST API for a Task Tracker'. It's pending review.", time: "2026-08-20T10:15:00", read: true, link: "/student/submissions/sub1" },
 ];
 
@@ -254,7 +254,7 @@ export const NOTIFICATIONS_ADMIN = [
   { id: "an1", type: "pending", title: "New submission", message: "Aarav Mehta submitted 'Implement a REST API for a Task Tracker'.", time: "2026-08-20T10:15:00", read: false, link: "/coordinator/submissions/sub1" },
   { id: "an2", type: "pending", title: "New submission", message: "Ananya Sharma submitted 'Build a Responsive Portfolio Landing Page'.", time: "2026-08-22T20:10:00", read: false, link: "/coordinator/submissions/sub8" },
   { id: "an3", type: "pending", title: "New submission", message: "Diya Kapoor submitted 'Git & GitHub Workflow Challenge'.", time: "2026-08-21T16:45:00", read: false, link: "/coordinator/submissions/sub5" },
-  { id: "an4", type: "task", title: "Task deadline soon", message: "'Git & GitHub Workflow Challenge' deadline is approaching with 2 students yet to submit.", time: "2026-08-16T09:00:00", read: true, link: "/coordinator/tasks" },
+  { id: "an4", type: "task", title: "Task deadline soon", message: "'Git & GitHub Workflow Challenge' deadline is Sep 30 with 2 students yet to submit.", time: "2026-08-16T09:00:00", read: true, link: "/coordinator/tasks" },
   { id: "an5", type: "info", title: "New member joined", message: "Kabir Singh joined Nexura and was added to the roster.", time: "2026-01-10T09:00:00", read: true, link: "/coordinator/students" },
 ];
 
@@ -285,26 +285,49 @@ export function getLatestSubmission(submissions, taskId, studentId) {
   return subs[0] || null;
 }
 
+// Parse a date value for display/comparison. Date-only strings ("2026-10-01")
+// are treated as LOCAL midnight; full timestamps parse as-is. Plain
+// `new Date("2026-10-01")` parses as UTC midnight, which shifts the calendar
+// date by a day for timezones west of UTC.
+const toLocalDate = (value) => {
+  if (!value) return null;
+  const str = String(value);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(str)
+    ? new Date(`${str}T00:00:00`)
+    : new Date(str);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+// "Now" as local calendar midnight, so day counts are whole days.
+const startOfToday = () => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+};
+
 export function isOverdue(deadline, status) {
   if (status === "approved") return false;
-  return new Date(deadline) < new Date("2026-08-23");
+  const d = toLocalDate(deadline);
+  return !!d && d < startOfToday();
 }
 
 export function formatDate(dateStr) {
   if (!dateStr) return "—";
-  const d = new Date(dateStr);
+  const d = toLocalDate(dateStr);
+  if (!d) return dateStr;
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
 export function formatDateTime(dateStr) {
   if (!dateStr) return "—";
-  const d = new Date(dateStr);
+  const d = toLocalDate(dateStr);
+  if (!d) return dateStr;
   return d.toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 export function timeAgo(dateStr) {
-  const now = new Date("2026-08-23T12:00:00");
-  const then = new Date(dateStr);
+  const now = new Date();
+  const then = toLocalDate(dateStr);
+  if (!then) return "—";
   const diffMs = now - then;
   const mins = Math.floor(diffMs / 60000);
   if (mins < 1) return "just now";
@@ -317,8 +340,8 @@ export function timeAgo(dateStr) {
 }
 
 export function daysUntil(dateStr) {
-  const now = new Date("2026-08-23T00:00:00");
-  const target = new Date(dateStr);
-  const diff = Math.ceil((target - now) / (1000 * 60 * 60 * 24));
+  const target = toLocalDate(dateStr);
+  if (!target) return 0;
+  const diff = Math.ceil((target - startOfToday()) / (1000 * 60 * 60 * 24));
   return diff;
 }

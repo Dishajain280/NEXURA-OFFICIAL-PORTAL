@@ -16,11 +16,16 @@ export async function signUpUser(email, password, name) {
 }
 
 export async function loginUser(email, password) {
+  // Strict credential verification: supabase.auth.signInWithPassword validates
+  // the email/password pair server-side and returns an AuthApiError (e.g.
+  // "Invalid login credentials") when they do not match. That error is
+  // propagated to the caller untouched — never swallowed.
   const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password,
   });
   if (error) throw error;
+  if (!data?.user) throw new Error("Invalid login credentials");
   return data;
 }
 
@@ -44,7 +49,10 @@ export async function createTask(taskData) {
         .eq("id", userData.user.id)
         .maybeSingle();
 
-      const role = profile?.role || "coordinator";
+      // Fail closed: if the profile can't be read, treat the caller as a
+      // student. Never assume coordinator on a missing/errored lookup — that
+      // would let a student create tasks whenever the check hiccups.
+      const role = profile?.role || "student";
       if (!["admin", "coordinator", "Faculty Coordinator"].includes(role)) {
         throw new Error("Coordinator or Admin access required to create tasks");
       }

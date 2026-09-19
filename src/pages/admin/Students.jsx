@@ -22,7 +22,7 @@ const normalizeStudent = (row) => ({
   branch: row.branch || "Computer Science",
   year: row.year || "3rd Year",
   avatarColor: row.avatar_color || row.avatarColor || "#7C3AED",
-  joined: row.joined_at || row.created_at || new Date().toISOString(),
+  joined: row.joined_at || row.created_at || "2024-08-12",
 });
 
 const getSubmissionStatusForTask = (submissions, taskId, studentId) => {

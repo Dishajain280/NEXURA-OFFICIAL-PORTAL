@@ -15,7 +15,7 @@ import {
   getStudentById as getMockStudentById,
   getTaskById as getMockTaskById,
 } from "../data/mockData";
-import supabase from "../supabaseClient";
+import supabase, { isSupabaseConfigured } from "../supabaseClient";
 import {
   loginUser,
   signUpUser,
@@ -29,6 +29,29 @@ const AppContext = createContext(null);
 
 let idCounter = 100;
 const nextId = (prefix) => `${prefix}${idCounter++}`;
+
+// Real Supabase users have UUID ids; demo/local fallback users do not.
+const isDbUuid = (value = "") =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    String(value),
+  );
+
+// Demo/local sessions have no real join date. Persist the first-seen date per
+// email so "Member since" stays stable across sessions instead of showing the
+// current date, which visibly churns day to day (e.g. Sept 30 -> Oct 1).
+const DEFAULT_JOINED = "2024-08-12";
+const getLocalJoinedDate = (email = "") => {
+  try {
+    const key = `nexura_local_joined:${String(email).toLowerCase()}`;
+    const existing = localStorage.getItem(key);
+    if (existing) return existing;
+    const today = new Date().toISOString().slice(0, 10);
+    localStorage.setItem(key, today);
+    return today;
+  } catch {
+    return DEFAULT_JOINED;
+  }
+};
 
 const normalizeTask = (row, fallbackStudentIds = []) => {
   const assigned =
@@ -100,9 +123,10 @@ const safeSupabaseQuery = async (queryBuilder, fallback = { data: null }) => {
 };
 
 const buildAuthState = (user, profile) => {
-  const role = normalizeRole(
-    profile?.role || user?.user_metadata?.role || "student",
-  );
+  // The database profile is the single source of truth for the role. Never
+  // trust user_metadata.role — it is client-supplied at signup and could be
+  // forged to request coordinator access.
+  const role = normalizeRole(profile?.role || "student");
   return {
     role,
     user: {
@@ -229,39 +253,89 @@ export function AppProvider({ children }) {
           return [...dbSubs, ...customSubs];
         });
       }
+
+      // Persistent notifications (real Supabase users only — demo/local
+      // sessions keep the seeded mock notifications).
+      if (auth?.user && isDbUuid(auth.user.id)) {
+        const notifResult = await safeSupabaseQuery(
+          supabase
+            .from("notifications")
+            .select("*")
+            .eq("user_id", auth.user.id)
+            .order("created_at", { ascending: false })
+            .limit(50),
+        );
+        if (Array.isArray(notifResult?.data)) {
+          const dbNotifs = notifResult.data.map((n) => ({
+            id: n.id,
+            type: n.type,
+            title: n.title,
+            message: n.message,
+            link: n.link,
+            read: n.read,
+            time: n.created_at,
+          }));
+          if (normalizeRole(auth.user.role) === "coordinator") {
+            setAdminNotifs(dbNotifs);
+          } else {
+            setStudentNotifs(dbNotifs);
+          }
+        }
+      }
     } catch (error) {
       console.warn("Supabase sync failed, using current state.", error);
     }
   }, [auth?.user]);
 
-  const hydrateAuthFromUser = useCallback(async (user) => {
-    if (!user) {
-      setAuth(null);
-      return;
-    }
-
-    try {
-      const profile = await fetchCurrentProfile(user.id);
-      const authState = buildAuthState(user, profile);
-      setAuth(authState);
-    } catch (error) {
-      console.warn("Profile hydration failed", error);
-      setAuth({
-        role: "student",
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.user_metadata?.name || user.email.split("@")[0],
-          role: "student",
-          avatarColor: "#7C3AED",
-          rollNo: "CS21B045",
-          branch: "Computer Science",
-          year: "3rd Year",
-          joined: "2024-08-12",
-        },
-      });
-    }
+  const commitAuth = useCallback((nextAuthState) => {
+    setAuth((prev) => {
+      if (
+        prev &&
+        prev.user &&
+        nextAuthState?.user &&
+        JSON.stringify(prev.user) === JSON.stringify(nextAuthState.user)
+      ) {
+        // Same session/profile content: keep the previous object identity.
+        // Otherwise derived callbacks (e.g. syncLiveData, keyed off
+        // auth.user) change identity, re-running the bootstrap effect, which
+        // re-subscribes to onAuthStateChange and replays INITIAL_SESSION,
+        // producing an infinite refetch/request loop (ERR_INSUFFICIENT_RESOURCES).
+        return prev;
+      }
+      return nextAuthState;
+    });
   }, []);
+
+  const hydrateAuthFromUser = useCallback(
+    async (user) => {
+      if (!user) {
+        setAuth(null);
+        return;
+      }
+
+      try {
+        const profile = await fetchCurrentProfile(user.id);
+        commitAuth(buildAuthState(user, profile));
+      } catch (error) {
+        console.warn("Profile hydration failed", error);
+        commitAuth({
+          role: "student",
+          user: {
+            id: user.id,
+            email: user.email,
+            name: user.user_metadata?.name || user.email.split("@")[0],
+            role: "student",
+            avatarColor: "#7C3AED",
+            rollNo: "CS21B045",
+            branch: "Computer Science",
+            year: "3rd Year",
+            joined: "2024-08-12",
+          },
+        });
+      }
+    },
+    [commitAuth],
+  );
 
   useEffect(() => {
     let active = true;
@@ -289,53 +363,116 @@ export function AppProvider({ children }) {
 
     bootstrap();
 
-    let channel;
-    if (supabase?.channel) {
-      channel = supabase
-        .channel("nexura-realtime-sync")
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "tasks" },
-          () => {
+    let channel = null;
+    let pollTimer = null;
+    let joinCheckTimer = null;
+
+    // Live-refresh via Supabase Realtime. Each listener is registered as its
+    // own statement instead of chaining `.on(...)` calls: the post-deployment
+    // bundle threw "TypeError: ...channel(...).on(...).on is not a function"
+    // whenever the bundled @supabase/realtime-js `.on()` did not return a
+    // chainable channel (dependency version drift at build/deploy time).
+    // Calling `.on()` per statement only relies on listener side effects, and
+    // the feature checks + try/catch make realtime failures degrade to the
+    // polling fallback instead of crashing the app bootstrap.
+    const setupRealtime = () => {
+      if (typeof supabase?.channel !== "function") return;
+
+      try {
+        const realtimeChannel = supabase.channel("nexura-realtime-sync");
+        if (typeof realtimeChannel?.on !== "function") return;
+
+        const onTableChange = (table) => {
+          realtimeChannel.on(
+            "postgres_changes",
+            { event: "*", schema: "public", table },
+            () => {
+              if (active) syncLiveData();
+            },
+          );
+        };
+
+        onTableChange("tasks");
+        onTableChange("submissions");
+        onTableChange("profiles");
+        onTableChange("notifications");
+
+        let joined = false;
+        const startFallbackPolling = () => {
+          if (pollTimer || !active) return;
+          pollTimer = setInterval(() => {
             if (active) syncLiveData();
-          },
-        )
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "submissions" },
-          () => {
-            if (active) syncLiveData();
-          },
-        )
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "profiles" },
-          () => {
-            if (active) syncLiveData();
-          },
-        )
-        .subscribe();
+          }, 25000);
+        };
+
+        if (typeof realtimeChannel.subscribe === "function") {
+          realtimeChannel.subscribe((status) => {
+            if (status === "SUBSCRIBED") {
+              joined = true;
+              if (pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+              }
+            } else if (
+              status === "CHANNEL_ERROR" ||
+              status === "TIMED_OUT" ||
+              status === "CLOSED"
+            ) {
+              startFallbackPolling();
+            }
+          });
+        }
+        channel = realtimeChannel;
+
+        // If the realtime socket never confirms within 6s (e.g. the project
+        // has realtime disabled), fall back to polling so data and
+        // notifications still refresh in other sessions.
+        joinCheckTimer = setTimeout(() => {
+          if (!joined && active) startFallbackPolling();
+        }, 6000);
+      } catch (error) {
+        console.warn("Realtime sync setup failed:", error);
+      }
+    };
+
+    setupRealtime();
+
+    if (!channel) {
+      // Realtime channel unavailable: keep live data fresh via polling.
+      pollTimer = setInterval(() => {
+        if (active) syncLiveData();
+      }, 25000);
     }
 
-    if (!supabase?.auth?.onAuthStateChange) return undefined;
+    let subscription = null;
+    if (supabase?.auth?.onAuthStateChange) {
+      const { data } = supabase.auth.onAuthStateChange(
+        async (event, session) => {
+          if (!active) return;
 
-    const { data: subscription } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (!active) return;
-
-        try {
-          if (session?.user) {
-            await hydrateAuthFromUser(session.user);
+          try {
+            if (session?.user) {
+              await hydrateAuthFromUser(session.user);
+            } else if (event === "SIGNED_OUT") {
+              // Logout can also arrive as an auth event from another open tab
+              // (auth-js broadcasts across tabs). Clear React state so
+              // ProtectedRoute redirects to /login instead of leaving a ghost
+              // logged-in UI.
+              setAuth(null);
+            }
+            await syncLiveData();
+          } catch (error) {
+            console.warn("Auth change sync failed", error);
           }
-          await syncLiveData();
-        } catch (error) {
-          console.warn("Auth change sync failed", error);
-        }
-      },
-    );
+        },
+      );
+      subscription = data?.subscription ?? null;
+    }
 
     return () => {
       active = false;
+      if (pollTimer) clearInterval(pollTimer);
+      if (joinCheckTimer) clearTimeout(joinCheckTimer);
       if (subscription && typeof subscription.unsubscribe === "function") {
         subscription.unsubscribe();
       }
@@ -347,10 +484,44 @@ export function AppProvider({ children }) {
 
   const login = useCallback(
     async (role, email, password) => {
+      const requestedRole = normalizeRole(role || "student");
+
       try {
+        // Strict credential verification: loginUser delegates to
+        // supabase.auth.signInWithPassword and throws the native Supabase
+        // error ("Invalid login credentials") when the password does not
+        // match — never a silent local login.
         const { user } = await loginUser(email, password);
+        if (!user?.id) throw new Error("Invalid login credentials");
+
+        // The database profile is the single source of truth for the role.
         const profile = await fetchCurrentProfile(user.id);
-        const effectiveRole = normalizeRole(profile?.role || role || "student");
+        const effectiveRole = normalizeRole(profile?.role || "student");
+
+        // Strict role gate: the account's database role must match the portal
+        // tab the user selected. On mismatch the session is revoked
+        // server-side and the login is rejected — a student picking the
+        // Coordinator tab gets "Access Denied" instead of being silently
+        // redirected (and vice versa).
+        if (requestedRole !== effectiveRole) {
+          try {
+            await supabase.auth.signOut({ scope: "global" });
+          } catch (signOutErr) {
+            console.warn(
+              "Session revocation after role mismatch failed:",
+              signOutErr,
+            );
+          }
+          const deniedMessage =
+            requestedRole === "coordinator"
+              ? "Access Denied: this account is registered as a student — you do not have coordinator access."
+              : "Access Denied: this account is a coordinator — use the coordinator portal.";
+          // Toast from the context (not the page) so the message survives the
+          // redirect bounce the revoked session causes.
+          pushToast(deniedMessage, "danger");
+          throw new Error(deniedMessage);
+        }
+
         const authState = buildAuthState(
           user,
           profile || { role: effectiveRole },
@@ -359,43 +530,41 @@ export function AppProvider({ children }) {
         await syncLiveData();
         return authState;
       } catch (err) {
-        const demoRole = normalizeRole(role || "student");
-        const demoUser =
-          demoRole === "coordinator"
-            ? {
-                id: "a1",
-                email,
-                name: "Prof. Sameer Rao",
-                role: "coordinator",
-                avatarColor: "#5B21B6",
-                rollNo: "FAC001",
-                branch: "Faculty",
-                year: "Faculty",
-                joined: "2023-01-01",
-              }
-            : {
-                id: "s1",
-                email,
-                name: email.split("@")[0]
-                  ? email.split("@")[0].replace(".", " ")
-                  : "Aarav Mehta",
-                role: "student",
-                avatarColor: "#7C3AED",
-                rollNo: "CS21B045",
-                branch: "Computer Science",
-                year: "3rd Year",
-                joined: "2024-08-12",
-              };
+        // Demo fallback ONLY when no real Supabase backend is configured
+        // (noop client — env vars missing at build time). With a real
+        // backend, every failure — wrong password, unknown email, network
+        // error — is rethrown so the login attempt is explicitly rejected.
+        if (!isSupabaseConfigured) {
+          if (requestedRole !== "student") {
+            throw new Error(
+              "Access Denied: local demo sessions are student-only. Coordinator access requires a database role.",
+            );
+          }
+          const demoUser = {
+            id: "s1",
+            email,
+            name: email.split("@")[0]
+              ? email.split("@")[0].replace(".", " ")
+              : "Aarav Mehta",
+            role: "student",
+            avatarColor: "#7C3AED",
+            rollNo: "CS21B045",
+            branch: "Computer Science",
+            year: "3rd Year",
+            joined: getLocalJoinedDate(email),
+          };
 
-        const authState = {
-          role: demoUser.role,
-          user: demoUser,
-        };
-        setAuth(authState);
-        return authState;
+          const authState = {
+            role: demoUser.role,
+            user: demoUser,
+          };
+          setAuth(authState);
+          return authState;
+        }
+        throw err;
       }
     },
-    [syncLiveData],
+    [pushToast, syncLiveData],
   );
 
   const signup = useCallback(
@@ -406,7 +575,10 @@ export function AppProvider({ children }) {
 
         if (user) {
           const profile = await fetchCurrentProfile(user.id);
-          const effectiveRole = profile?.role || role || "student";
+          // Strictly student by default: the DB trigger creates the profile
+          // with role 'student', and the role guard rejects anything else for
+          // non-admin signups. Never honor a requested role here.
+          const effectiveRole = profile?.role || "student";
 
           if (
             role === "coordinator" &&
@@ -414,7 +586,7 @@ export function AppProvider({ children }) {
             typeof pushToast === "function"
           ) {
             pushToast(
-              "Coordinator account created as student role by system default.",
+              "Coordinator accounts are not created via signup. You joined as a student.",
               "warning",
             );
           }
@@ -425,43 +597,81 @@ export function AppProvider({ children }) {
           );
           setAuth(authState);
           await syncLiveData();
-          return result;
+          return authState;
         }
       } catch (err) {
         console.warn("Supabase signup failed, creating local session:", err);
       }
 
-      const localId = `u_${Date.now()}`;
+      // Local fallback session: always a student. Same rule as login — the
+      // demo path must never mint a coordinator.
       const localUser = {
-        id: localId,
+        id: `u_${Date.now()}`,
         email,
         name,
-        role,
-        avatarColor: role === "coordinator" ? "#5B21B6" : "#7C3AED",
+        role: "student",
+        avatarColor: "#7C3AED",
         rollNo: "CS21B" + Math.floor(100 + Math.random() * 900),
         branch: "Computer Science",
         year: "1st Year",
-        joined: new Date().toISOString().slice(0, 10),
+        joined: getLocalJoinedDate(email),
       };
 
-      if (role === "student") {
-        setStudents((prev) => [localUser, ...prev]);
-      }
+      setStudents((prev) => [localUser, ...prev]);
 
-      const authState = { role, user: localUser };
+      const authState = { role: "student", user: localUser };
       setAuth(authState);
-      return { user: localUser };
+      return authState;
     },
     [pushToast, syncLiveData],
   );
 
   const logout = useCallback(async () => {
-    try {
-      await supabase.auth.signOut();
-    } catch (e) {
-      console.warn("Sign out error:", e);
-    }
+    // 1. Purge React auth state FIRST so the UI responds instantly and
+    //    ProtectedRoute redirects away regardless of network conditions.
+    //    Waiting on signOut() made logout hang whenever the auth request
+    //    stalled on a flaky network, leaving the user stuck on the dashboard.
     setAuth(null);
+
+    // 2. Revoke the session server-side. scope "global" calls
+    //    POST /auth/v1/logout?scope=global, which invalidates the refresh
+    //    token — backend JWTs are actually revoked, not just dropped from
+    //    this browser's storage.
+    try {
+      await supabase.auth.signOut({ scope: "global" });
+    } catch (e) {
+      // Best-effort: if the network is down the local purge below still
+      // guarantees the user is signed out in this browser.
+      console.warn("Sign out error (local purge continues):", e);
+    }
+
+    // 3. Wipe app-owned browser storage: Supabase auth tokens ("sb-...")
+    //    and local demo keys ("nexura_..."). This is a targeted wipe, not
+    //    localStorage.clear(), so unrelated site data is preserved.
+    try {
+      const doomed = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith("sb-") || key.startsWith("nexura_"))) {
+          doomed.push(key);
+        }
+      }
+      doomed.forEach((k) => localStorage.removeItem(k));
+      sessionStorage.clear();
+    } catch (e) {
+      console.warn("Storage wipe failed:", e);
+    }
+
+    // 4. Full-page redirect to the root. A hard navigation (not a router
+    //    push) guarantees a fresh app bootstrap — no stale React state,
+    //    subscriptions, or in-memory data can survive in this tab, and any
+    //    pending framework work is discarded cleanly instead of crashing on
+    //    the unmounted tree.
+    try {
+      window.location.replace("/");
+    } catch (e) {
+      console.warn("Redirect failed:", e);
+    }
   }, []);
 
   const createTask = useCallback(
@@ -618,40 +828,46 @@ export function AppProvider({ children }) {
 
   const reviewSubmission = useCallback(
     async (submissionId, status, feedback) => {
+      const reviewedAt = new Date().toISOString();
+
+      // Optimistic update so the UI feels instant.
       setSubmissions((prev) =>
         prev.map((s) =>
           s.id === submissionId
-            ? { ...s, status, feedback, reviewedAt: new Date().toISOString() }
+            ? { ...s, status, feedback, reviewedAt }
             : s,
         ),
       );
 
       try {
-        await supabase
+        const { data, error } = await supabase
           .from("submissions")
-          .update({ status })
-          .eq("id", submissionId);
+          .update({ status, feedback, reviewed_at: reviewedAt })
+          .eq("id", submissionId)
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        // Replace with the authoritative DB row so a reload agrees with the UI.
+        if (data) {
+          const normalized = normalizeSubmission(data);
+          setSubmissions((prev) =>
+            prev.map((s) =>
+              s.id === submissionId ? { ...s, ...normalized } : s,
+            ),
+          );
+        }
       } catch (err) {
-        console.warn("Database review update skipped:", err);
+        console.warn("Database review update failed:", err);
+        pushToast("Review could not be saved to the database.", "danger");
+        await syncLiveData(); // Revert optimistic state to DB truth.
+        return;
       }
 
-      const sub = submissions.find((s) => s.id === submissionId);
-      const task = tasks.find((t) => t.id === sub?.taskId);
-
-      setStudentNotifs((prev) => [
-        {
-          id: nextId("n"),
-          type: status,
-          title:
-            status === "approved" ? "Submission approved" : "Changes requested",
-          message: `Your submission for '${task?.title || "a task"}' was ${status === "approved" ? "approved" : "sent back with feedback"}.`,
-          time: new Date().toISOString(),
-          read: false,
-          link: `/student/submissions/${submissionId}`,
-        },
-        ...prev,
-      ]);
-
+      // The student-facing notification is created by the DB trigger on the
+      // status change, so it survives reloads and reaches the student's
+      // account even in a different session.
       pushToast(
         status === "approved"
           ? "Submission approved"
@@ -659,7 +875,7 @@ export function AppProvider({ children }) {
         status === "approved" ? "success" : "danger",
       );
     },
-    [pushToast, submissions, tasks],
+    [pushToast, syncLiveData],
   );
 
   const removeSubmission = useCallback(
@@ -726,25 +942,62 @@ export function AppProvider({ children }) {
     [tasks],
   );
 
-  const markNotifRead = useCallback((role, id) => {
-    if (role === "student") {
-      setStudentNotifs((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
-      );
-    } else {
-      setAdminNotifs((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
-      );
-    }
-  }, []);
+  const persistNotifRead = useCallback(
+    async (id) => {
+      const userId = auth?.user?.id;
+      if (!userId || !isDbUuid(userId) || !isDbUuid(id)) return;
+      try {
+        await supabase
+          .from("notifications")
+          .update({ read: true })
+          .eq("id", id)
+          .eq("user_id", userId);
+      } catch (err) {
+        console.warn("Failed to mark notification read:", err);
+      }
+    },
+    [auth?.user?.id],
+  );
 
-  const markAllNotifRead = useCallback((role) => {
-    if (role === "student") {
-      setStudentNotifs((prev) => prev.map((n) => ({ ...n, read: true })));
-    } else {
-      setAdminNotifs((prev) => prev.map((n) => ({ ...n, read: true })));
-    }
-  }, []);
+  const markNotifRead = useCallback(
+    (role, id) => {
+      if (role === "student") {
+        setStudentNotifs((prev) =>
+          prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
+        );
+      } else {
+        setAdminNotifs((prev) =>
+          prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
+        );
+      }
+      persistNotifRead(id);
+    },
+    [persistNotifRead],
+  );
+
+  const markAllNotifRead = useCallback(
+    async (role) => {
+      if (role === "student") {
+        setStudentNotifs((prev) => prev.map((n) => ({ ...n, read: true })));
+      } else {
+        setAdminNotifs((prev) => prev.map((n) => ({ ...n, read: true })));
+      }
+
+      const userId = auth?.user?.id;
+      if (userId && isDbUuid(userId)) {
+        try {
+          await supabase
+            .from("notifications")
+            .update({ read: true })
+            .eq("user_id", userId)
+            .eq("read", false);
+        } catch (err) {
+          console.warn("Failed to mark all notifications read:", err);
+        }
+      }
+    },
+    [auth?.user?.id],
+  );
 
   const value = useMemo(
     () => ({
