@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Search,
@@ -9,7 +9,6 @@ import {
   Trash2,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
-import supabase from "../../supabaseClient";
 import EmptyState from "../../components/EmptyState";
 import ConfirmDialog from "../../components/ConfirmDialog";
 
@@ -25,62 +24,20 @@ const formatDate = (value) => {
 };
 
 export default function ManageTasks() {
-  const { deleteTask } = useApp();
-  const [tasks, setTasks] = useState([]);
-  const [submissions, setSubmissions] = useState([]);
+  const { tasks, submissions, deleteTask } = useApp();
   const [query, setQuery] = useState("");
   const [taskToDelete, setTaskToDelete] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let active = true;
-
-    const fetchData = async () => {
-      try {
-        const [taskResult, submissionResult] = await Promise.all([
-          supabase
-            .from("tasks")
-            .select("*")
-            .order("created_at", { ascending: false }),
-          supabase
-            .from("submissions")
-            .select("*")
-            .order("created_at", { ascending: false }),
-        ]);
-
-        if (!active) return;
-
-        if (taskResult.error) throw taskResult.error;
-        if (submissionResult.error) throw submissionResult.error;
-
-        setTasks(taskResult.data || []);
-        setSubmissions(submissionResult.data || []);
-      } catch (error) {
-        console.error("Failed to fetch tasks data:", error);
-        setTasks([]);
-        setSubmissions([]);
-      } finally {
-        if (active) setLoading(false);
-      }
-    };
-
-    fetchData();
-
-    return () => {
-      active = false;
-    };
-  }, []);
 
   const filtered = useMemo(
     () =>
       tasks
         .filter((t) => t.title.toLowerCase().includes(query.toLowerCase()))
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
     [tasks, query],
   );
 
   const submissionCount = (taskId) =>
-    submissions.filter((s) => s.task_id === taskId).length;
+    submissions.filter((s) => s.taskId === taskId).length;
 
   return (
     <div className="space-y-6">
@@ -99,9 +56,7 @@ export default function ManageTasks() {
         </Link>
       </div>
 
-      {loading ? (
-        <div className="card p-6 text-sm text-slate">Loading tasks…</div>
-      ) : filtered.length === 0 ? (
+      {filtered.length === 0 ? (
         <div className="card">
           <EmptyState
             icon={ListChecks}
@@ -131,8 +86,8 @@ export default function ManageTasks() {
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                   <Users className="w-3.5 h-3.5" />{" "}
-                  {Array.isArray(task.assigned_to)
-                    ? task.assigned_to.length
+                  {Array.isArray(task.assignedTo)
+                    ? task.assignedTo.length
                     : 0}{" "}
                   assigned
                 </span>

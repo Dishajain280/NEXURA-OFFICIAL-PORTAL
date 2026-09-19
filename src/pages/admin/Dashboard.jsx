@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import { Link } from "react-router-dom";
 import {
   Users,
@@ -10,67 +10,13 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { useApp } from "../../context/AppContext";
-import supabase from "../../supabaseClient";
 import StatCard from "../../components/StatCard";
 import SubmissionTable from "../../components/SubmissionTable";
 import EmptyState from "../../components/EmptyState";
 import { Inbox } from "lucide-react";
 
 export default function Dashboard() {
-  const { auth } = useApp();
-  const [students, setStudents] = useState([]);
-  const [tasks, setTasks] = useState([]);
-  const [submissions, setSubmissions] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let active = true;
-
-    const fetchData = async () => {
-      try {
-        const [studentResult, taskResult, submissionResult] = await Promise.all(
-          [
-            supabase
-              .from("profiles")
-              .select("*")
-              .eq("role", "student")
-              .order("created_at", { ascending: false }),
-            supabase
-              .from("tasks")
-              .select("*")
-              .order("created_at", { ascending: false }),
-            supabase
-              .from("submissions")
-              .select("*")
-              .order("created_at", { ascending: false }),
-          ],
-        );
-
-        if (!active) return;
-
-        if (studentResult.error) throw studentResult.error;
-        if (taskResult.error) throw taskResult.error;
-        if (submissionResult.error) throw submissionResult.error;
-
-        setStudents(studentResult.data || []);
-        setTasks(taskResult.data || []);
-        setSubmissions(submissionResult.data || []);
-      } catch (error) {
-        console.error("Failed to fetch dashboard data:", error);
-        setStudents([]);
-        setTasks([]);
-        setSubmissions([]);
-      } finally {
-        if (active) setLoading(false);
-      }
-    };
-
-    fetchData();
-
-    return () => {
-      active = false;
-    };
-  }, []);
+  const { auth, students, tasks, submissions } = useApp();
 
   const counts = useMemo(() => {
     const c = {
@@ -91,18 +37,10 @@ export default function Dashboard() {
   const recentSubs = useMemo(
     () =>
       [...submissions]
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+        .sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))
         .slice(0, 6),
     [submissions],
   );
-
-  if (loading) {
-    return (
-      <div className="space-y-6">
-        <div className="card p-6 text-sm text-slate">Loading dashboard…</div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">

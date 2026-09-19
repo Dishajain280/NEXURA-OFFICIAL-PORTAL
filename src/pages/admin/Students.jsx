@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Search, Users } from "lucide-react";
+import { useApp } from "../../context/AppContext";
 import EmptyState from "../../components/EmptyState";
-import supabase from "../../supabaseClient";
 
 const formatDate = (value) => {
   if (!value) return "—";
@@ -14,84 +14,26 @@ const formatDate = (value) => {
   });
 };
 
-const normalizeStudent = (row) => ({
-  id: row.id,
-  name: row.name || "Student",
-  email: row.email || "",
-  rollNo: row.roll_no || row.rollNo || "N/A",
-  branch: row.branch || "Computer Science",
-  year: row.year || "3rd Year",
-  avatarColor: row.avatar_color || row.avatarColor || "#7C3AED",
-  joined: row.joined_at || row.created_at || "2024-08-12",
-});
 
 const getSubmissionStatusForTask = (submissions, taskId, studentId) => {
   if (!Array.isArray(submissions)) return "pending";
 
   const match = submissions.find(
     (submission) =>
-      (submission.task_id || submission.taskId) === taskId &&
-      (submission.student_id || submission.studentId) === studentId,
+      submission.taskId === taskId &&
+      submission.studentId === studentId,
   );
 
   return match?.status || "pending";
 };
 
 export default function Students() {
-  const [students, setStudents] = useState([]);
-  const [tasks, setTasks] = useState([]);
-  const [submissions, setSubmissions] = useState([]);
+  const { students: contextStudents, tasks, submissions } = useApp();
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let active = true;
-
-    const fetchData = async () => {
-      try {
-        const [studentResult, taskResult, submissionResult] = await Promise.all(
-          [
-            supabase
-              .from("profiles")
-              .select("*")
-              .eq("role", "student")
-              .order("created_at", {
-                ascending: false,
-              }),
-            supabase.from("tasks").select("*").order("created_at", {
-              ascending: false,
-            }),
-            supabase.from("submissions").select("*").order("created_at", {
-              ascending: false,
-            }),
-          ],
-        );
-
-        if (!active) return;
-
-        if (studentResult.error) throw studentResult.error;
-        if (taskResult.error) throw taskResult.error;
-        if (submissionResult.error) throw submissionResult.error;
-
-        setStudents((studentResult.data || []).map(normalizeStudent));
-        setTasks(taskResult.data || []);
-        setSubmissions(submissionResult.data || []);
-      } catch (error) {
-        console.error("Failed to fetch student dashboard data:", error);
-        setStudents([]);
-        setTasks([]);
-        setSubmissions([]);
-      } finally {
-        if (active) setLoading(false);
-      }
-    };
-
-    fetchData();
-
-    return () => {
-      active = false;
-    };
-  }, []);
+  const students = contextStudents.filter(
+    (s) => !s.role || s.role === "student"
+  );
 
   const filtered = useMemo(
     () =>
@@ -105,16 +47,10 @@ export default function Students() {
 
   const statsFor = (studentId) => {
     const assignedTasks = tasks.filter((task) => {
-      const assignedTo = Array.isArray(task.assigned_to)
-        ? task.assigned_to
-        : Array.isArray(task.assignedTo)
-          ? task.assignedTo
-          : [];
-
+      const assigned = Array.isArray(task.assignedTo) ? task.assignedTo : [];
       return (
-        assignedTo.length === 0 ||
-        assignedTo.includes(studentId) ||
-        !task.assigned_to
+        assigned.length === 0 ||
+        assigned.includes(studentId)
       );
     });
 
@@ -136,10 +72,6 @@ export default function Students() {
       pending,
     };
   };
-
-  if (loading) {
-    return <div className="card p-6 text-sm text-slate">Loading students…</div>;
-  }
 
   return (
     <div className="space-y-6">

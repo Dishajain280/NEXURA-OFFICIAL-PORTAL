@@ -1,6 +1,12 @@
 import supabase from "../supabaseClient";
 import { isUniversityEmail } from "../lib/roleGuard";
 
+// Real Supabase users have UUID ids; demo/local fallback users do not.
+const isDbUuid = (value = "") =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    String(value),
+  );
+
 export async function signUpUser(email, password, name) {
   if (!isUniversityEmail(email))
     throw new Error("Only .com university emails are allowed");
@@ -40,31 +46,43 @@ export async function fetchTasks() {
 }
 
 export async function createTask(taskData) {
+  // Role gate: only coordinators/admins may create tasks. The lookup is
+  // wrapped in its own try-catch so network errors during the role check
+  // don't crash the app — but an explicit authorization denial must always
+  // propagate so the caller sees the error.
+  let isAuthorized = false;
   try {
     const { data: userData } = await supabase.auth.getUser();
+    console.log("[createTask] getUser:", userData?.user?.id);
     if (userData?.user?.id) {
-      const { data: profile } = await supabase
+      const { data: profile, error: profileErr } = await supabase
         .from("profiles")
         .select("role")
         .eq("id", userData.user.id)
         .maybeSingle();
 
-      // Fail closed: if the profile can't be read, treat the caller as a
-      // student. Never assume coordinator on a missing/errored lookup — that
-      // would let a student create tasks whenever the check hiccups.
+      console.log("[createTask] profile:", profile, "error:", profileErr);
       const role = profile?.role || "student";
-      if (!["admin", "coordinator", "Faculty Coordinator"].includes(role)) {
-        throw new Error("Coordinator or Admin access required to create tasks");
+      if (["admin", "coordinator", "Faculty Coordinator"].includes(role)) {
+        isAuthorized = true;
       }
     }
   } catch (err) {
-    console.warn("Auth check warning in createTask:", err);
+    console.warn("[createTask] Role lookup failed:", err);
   }
 
+  console.log("[createTask] isAuthorized:", isAuthorized);
+  if (!isAuthorized) {
+    throw new Error("Coordinator or Admin access required to create tasks");
+  }
+
+  // Parse the deadline date and set it to end-of-day (23:59:59) so the
+  // DB CHECK (deadline > now()) constraint doesn't reject same-day deadlines.
   const deadline = new Date(taskData.deadline);
   if (Number.isNaN(deadline.getTime())) {
     throw new Error("Invalid task deadline date");
   }
+  deadline.setHours(23, 59, 59, 999);
 
   const payload = {
     title: taskData.title?.trim() || "Untitled Task",
@@ -79,17 +97,24 @@ export async function createTask(taskData) {
     assigned_to: Array.isArray(taskData.assignedTo) ? taskData.assignedTo : [],
   };
 
+  console.log("[createTask] Payload:", JSON.stringify(payload, null, 2));
+  console.log("[createTask] assigned_to type check:", payload.assigned_to.map((id) => ({ id, valid: isDbUuid(id) })));
+
   const { data, error } = await supabase
     .from("tasks")
     .insert([payload])
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error("[createTask] Supabase error:", error.message, error.code, error.details, error.hint);
+    throw error;
+  }
+  console.log("[createTask] Success:", data);
   return data;
 }
 
-export async function submitTask(file, taskId, studentId) {
+export async function submitTask(file, taskId, studentId, metadata = {}) {
   if (!file) throw new Error("File is required");
 
   const folder = `${studentId}`;
@@ -128,6 +153,9 @@ export async function submitTask(file, taskId, studentId) {
       .from("submissions")
       .update({
         file_url: signedUrlData.signedUrl,
+        github_url: metadata.githubUrl || "",
+        live_url: metadata.liveUrl || "",
+        notes: metadata.notes || "",
         status: "pending",
       })
       .eq("id", existingSubmission.id)
@@ -145,6 +173,9 @@ export async function submitTask(file, taskId, studentId) {
           student_id: studentId,
           task_id: taskId,
           file_url: signedUrlData.signedUrl,
+          github_url: metadata.githubUrl || "",
+          live_url: metadata.liveUrl || "",
+          notes: metadata.notes || "",
           status: "pending",
         },
       ])

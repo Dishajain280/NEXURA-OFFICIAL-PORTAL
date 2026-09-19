@@ -1,12 +1,24 @@
 import React, { useRef, useState } from "react";
 import { UploadCloud, File, X } from "lucide-react";
 
+const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB
+
 export default function FileUpload({ file, onFileSelect, accept, hint = "ZIP, PDF, or image files up to 25MB" }) {
   const inputRef = useRef(null);
   const [dragActive, setDragActive] = useState(false);
+  const [sizeError, setSizeError] = useState("");
 
   const handleFiles = (fileList) => {
-    if (fileList && fileList[0]) onFileSelect(fileList[0]);
+    setSizeError("");
+    if (fileList && fileList[0]) {
+      const selected = fileList[0];
+      if (selected.size > MAX_FILE_SIZE) {
+        const sizeMB = (selected.size / (1024 * 1024)).toFixed(1);
+        setSizeError(`File is ${sizeMB}MB — maximum allowed is 25MB.`);
+        return;
+      }
+      onFileSelect(selected);
+    }
   };
 
   return (
@@ -62,6 +74,9 @@ export default function FileUpload({ file, onFileSelect, accept, hint = "ZIP, PD
           </>
         )}
       </div>
+      {sizeError && (
+        <p className="text-xs text-red-400 mt-2">{sizeError}</p>
+      )}
     </div>
   );
 }

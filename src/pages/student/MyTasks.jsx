@@ -3,6 +3,7 @@ import { Search, ListChecks } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import TaskCard from "../../components/TaskCard";
 import EmptyState from "../../components/EmptyState";
+import { SkeletonCard } from "../../components/Skeleton";
 import { getSubmissionStatusForTask, isOverdue } from "../../data/mockData";
 
 const FILTERS = [
@@ -16,9 +17,9 @@ const FILTERS = [
 
 export default function MyTasks() {
   const { auth, tasks, submissions } = useApp();
-  const studentId = auth?.user?.id || "s1";
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
+  const studentId = auth?.user?.id || "s1";
 
   const myTasks = useMemo(() => {
     return tasks
@@ -32,6 +33,23 @@ export default function MyTasks() {
       })
       .sort((a, b) => new Date(a.task.deadline) - new Date(b.task.deadline));
   }, [tasks, submissions, studentId, filter, query]);
+
+  if (!auth) {
+    return (
+      <div className="space-y-6">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="w-24 h-9 rounded-lg animate-pulse bg-white/5" />
+          ))}
+        </div>
+        <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

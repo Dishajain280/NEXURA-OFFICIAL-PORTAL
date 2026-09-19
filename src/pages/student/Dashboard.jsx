@@ -6,6 +6,7 @@ import StatCard from "../../components/StatCard";
 import ProgressBar from "../../components/ProgressBar";
 import StatusBadge from "../../components/StatusBadge";
 import EmptyState from "../../components/EmptyState";
+import { SkeletonCard, SkeletonStatCard } from "../../components/Skeleton";
 import { formatDate, daysUntil, getSubmissionStatusForTask, timeAgo } from "../../data/mockData";
 
 export default function Dashboard() {
@@ -54,6 +55,30 @@ export default function Dashboard() {
   );
 
   const progressPct = counts.total > 0 ? (counts.approved / counts.total) * 100 : 0;
+
+  // Show loading skeleton while auth or data is loading
+  if (!auth) {
+    return (
+      <div className="space-y-6">
+        <div className="rounded-xl bg-nexura-gradient p-6 sm:p-8">
+          <SkeletonCard />
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <SkeletonStatCard />
+          <SkeletonStatCard />
+          <SkeletonStatCard />
+          <SkeletonStatCard />
+        </div>
+        <div className="grid lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-6">
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+          <SkeletonCard />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

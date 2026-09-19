@@ -4,6 +4,7 @@ import { ArrowLeft, Github, Globe, Paperclip, MessageSquareText, CalendarDays, R
 import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/StatusBadge";
 import { formatDateTime, getTaskById } from "../../data/mockData";
+import { sanitizeUrl } from "../../lib/sanitizeUrl";
 
 export default function SubmissionDetails() {
   const { id } = useParams();
@@ -44,13 +45,13 @@ export default function SubmissionDetails() {
           {sub.githubUrl && (
             <div className="flex items-center gap-3 rounded-lg border border-white/10 px-4 py-3 text-sm">
               <Github className="w-4 h-4 text-nexura-400 shrink-0" />
-              <a href={sub.githubUrl} target="_blank" rel="noreferrer" className="text-nexura-300 hover:underline truncate">{sub.githubUrl}</a>
+              <a href={sanitizeUrl(sub.githubUrl)} target="_blank" rel="noopener noreferrer" className="text-nexura-300 hover:underline truncate">{sub.githubUrl}</a>
             </div>
           )}
           {sub.liveUrl && (
             <div className="flex items-center gap-3 rounded-lg border border-white/10 px-4 py-3 text-sm">
               <Globe className="w-4 h-4 text-nexura-400 shrink-0" />
-              <a href={sub.liveUrl} target="_blank" rel="noreferrer" className="text-nexura-300 hover:underline truncate">{sub.liveUrl}</a>
+              <a href={sanitizeUrl(sub.liveUrl)} target="_blank" rel="noopener noreferrer" className="text-nexura-300 hover:underline truncate">{sub.liveUrl}</a>
             </div>
           )}
           {!sub.fileName && !sub.githubUrl && !sub.liveUrl && (

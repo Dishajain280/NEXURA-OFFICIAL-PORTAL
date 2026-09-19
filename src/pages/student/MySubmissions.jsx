@@ -4,6 +4,7 @@ import { Search, FolderCheck, Github, Globe, Paperclip, ChevronRight } from "luc
 import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/StatusBadge";
 import EmptyState from "../../components/EmptyState";
+import { SkeletonTable } from "../../components/Skeleton";
 import { formatDateTime, getTaskById } from "../../data/mockData";
 
 const FILTERS = ["all", "pending", "approved", "rejected"];
@@ -21,6 +22,16 @@ export default function MySubmissions() {
       .filter((s) => (getTask(s.taskId)?.title || "").toLowerCase().includes(query.toLowerCase()))
       .sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
   }, [submissions, studentId, filter, query, getTask]);
+
+  if (!auth) {
+    return (
+      <div className="space-y-6">
+        <div className="card p-6">
+          <SkeletonTable rows={4} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

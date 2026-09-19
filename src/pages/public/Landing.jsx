@@ -34,8 +34,8 @@ export default function Landing() {
           <Link to="/login" className="text-sm font-medium text-nexura-200 hover:text-white px-2.5 sm:px-4 py-2 transition-colors whitespace-nowrap">
             Log in
           </Link>
-          <Link to="/signup" className="btn-primary text-sm px-3.5 sm:px-4 py-2 whitespace-nowrap">
-            Join Nexura
+          <Link to="/login" className="btn-primary text-sm px-3.5 sm:px-4 py-2 whitespace-nowrap">
+            Join Now
           </Link>
         </nav>
       </header>
@@ -58,8 +58,8 @@ export default function Landing() {
               Nexura's task portal replaces the scattered spreadsheets and DMs with one place to assign work, submit it, and track every review — from first draft to final approval.
             </p>
             <div className="mt-9 flex flex-wrap items-center gap-4">
-              <Link to="/signup" className="btn-primary px-6 py-3 text-[15px]">
-                Get started as a member <ArrowRight className="w-4 h-4" />
+              <Link to="/login" className="btn-primary px-6 py-3 text-[15px]">
+                Log in to Nexura <ArrowRight className="w-4 h-4" />
               </Link>
               <Link to="/login" className="text-sm font-semibold text-white/90 hover:text-white border border-white/15 hover:border-white/30 rounded-xl px-6 py-3 transition-colors">
                 Coordinator login
@@ -138,8 +138,8 @@ export default function Landing() {
             <h2 className="font-display text-2xl sm:text-3xl font-bold">Ready to move your next task forward?</h2>
             <p className="text-white/85 mt-3 max-w-md mx-auto">Log in as a member to see your assigned tasks, or as a coordinator to start reviewing submissions.</p>
             <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
-              <Link to="/signup" className="bg-white text-nexura-700 font-semibold rounded-xl px-6 py-3 text-sm hover:bg-nexura-50 transition-colors">
-                Create your account
+              <Link to="/login" className="bg-white text-nexura-700 font-semibold rounded-xl px-6 py-3 text-sm hover:bg-nexura-50 transition-colors">
+                Log in to Nexura
               </Link>
               <Link to="/login" className="border border-white/40 text-white font-semibold rounded-xl px-6 py-3 text-sm hover:bg-white/10 transition-colors">
                 I already have one

@@ -27,8 +27,10 @@ import { normalizeRole } from "../lib/roleGuard";
 
 const AppContext = createContext(null);
 
-let idCounter = 100;
-const nextId = (prefix) => `${prefix}${idCounter++}`;
+// Use crypto.randomUUID() for unique IDs that survive HMR. The old
+// module-level counter reset on every hot reload, producing duplicate keys
+// in React lists.
+const nextId = (prefix) => `${prefix}_${crypto.randomUUID()}`;
 
 // Real Supabase users have UUID ids; demo/local fallback users do not.
 const isDbUuid = (value = "") =>
@@ -185,9 +187,11 @@ export function AppProvider({ children }) {
         ),
       ]);
 
+      // When a real Supabase backend is configured, use ONLY DB data.
+      // Mock data is only shown in local/demo mode (noop client).
       let liveStudents = [];
-      if (profileRows?.data && profileRows.data.length > 0) {
-        const dbStudents = profileRows.data
+      if (isSupabaseConfigured && profileRows?.data && profileRows.data.length > 0) {
+        liveStudents = profileRows.data
           .filter((p) => p.role === "student" || !p.role || p.role === "")
           .map((p) => ({
             id: p.id,
@@ -205,16 +209,8 @@ export function AppProvider({ children }) {
               ? new Date(p.created_at).toISOString().slice(0, 10)
               : "2024-08-12",
           }));
-
-        const studentMap = new Map();
-        dbStudents.forEach((s) => studentMap.set(s.id, s));
-        STUDENTS.forEach((m) => {
-          if (!studentMap.has(m.id)) {
-            studentMap.set(m.id, m);
-          }
-        });
-        liveStudents = Array.from(studentMap.values());
-      } else {
+      } else if (!isSupabaseConfigured) {
+        // Demo mode: use mock data only.
         liveStudents = [...STUDENTS];
       }
 
@@ -234,24 +230,22 @@ export function AppProvider({ children }) {
 
       const allStudentIds = liveStudents.map((s) => s.id);
 
-      if (taskRows && taskRows.length > 0) {
-        const dbTasks = taskRows.map((t) => normalizeTask(t, allStudentIds));
-        setTasks((prev) => {
-          const customTasks = prev.filter(
-            (t) => !dbTasks.some((d) => d.id === t.id),
-          );
-          return [...dbTasks, ...customTasks];
-        });
-      }
+      if (isSupabaseConfigured) {
+        // Real backend: use ONLY DB data. If the DB returns empty arrays,
+        // set empty state — never fall back to mock data.
+        const dbTasks = taskRows?.length > 0
+          ? taskRows.map((t) => normalizeTask(t, allStudentIds))
+          : [];
+        setTasks(dbTasks);
 
-      if (submissionRows?.data && submissionRows.data.length > 0) {
-        const dbSubs = submissionRows.data.map(normalizeSubmission);
-        setSubmissions((prev) => {
-          const customSubs = prev.filter(
-            (s) => !dbSubs.some((d) => d.id === s.id),
-          );
-          return [...dbSubs, ...customSubs];
-        });
+        const dbSubs = submissionRows?.data?.length > 0
+          ? submissionRows.data.map(normalizeSubmission)
+          : [];
+        setSubmissions(dbSubs);
+      } else {
+        // Demo mode: use mock data only.
+        setTasks(TASKS);
+        setSubmissions(SUBMISSIONS);
       }
 
       // Persistent notifications (real Supabase users only — demo/local
@@ -676,79 +670,95 @@ export function AppProvider({ children }) {
 
   const createTask = useCallback(
     async (taskData) => {
-      const newId = `t_${Date.now()}`;
       const allStudentIds = students.map((s) => s.id);
       const assigned =
         Array.isArray(taskData.assignedTo) && taskData.assignedTo.length > 0
           ? taskData.assignedTo
           : allStudentIds;
 
-      const newTask = {
-        id: newId,
-        title: taskData.title?.trim() || "Untitled Task",
-        category: taskData.category || "Web Development",
-        description: taskData.description?.trim() || "",
-        difficulty: taskData.difficulty || "Intermediate",
-        points: Number(taskData.points || 100),
-        deadline: taskData.deadline || "2026-09-30",
-        createdAt: new Date().toISOString().slice(0, 10),
-        requirements: Array.isArray(taskData.requirements)
-          ? taskData.requirements.filter((r) => r.trim())
-          : [],
-        assignedTo: assigned,
-      };
+      console.log("[context createTask] Starting. assigned:", assigned);
 
       try {
         const created = await createDbTask(taskData);
+        console.log("[context createTask] createDbTask returned:", created);
         if (created) {
           const normalized = normalizeTask(created);
-          const merged = { ...newTask, ...normalized, assignedTo: assigned };
+          const merged = { ...normalized, assignedTo: assigned };
           setTasks((prev) => [merged, ...prev]);
           pushToast("Task created successfully!");
           return merged;
         }
       } catch (err) {
-        console.warn(
-          "Database task creation skipped/failed, created locally:",
-          err,
-        );
+        console.error("[context createTask] Database task creation failed:", err?.message || err);
       }
 
-      setTasks((prev) => [newTask, ...prev]);
-      pushToast("Task created successfully!");
-      return newTask;
+      pushToast(
+        "Could not save task to the database. Check your connection and try again.",
+        "danger",
+      );
+      return null;
     },
     [pushToast, students],
   );
 
   const updateTask = useCallback(
     async (taskId, updates) => {
+      // Optimistic update in React state (camelCase).
       setTasks((prev) =>
         prev.map((t) => (t.id === taskId ? { ...t, ...updates } : t)),
       );
       try {
-        await supabase.from("tasks").update(updates).eq("id", taskId);
+        // Convert camelCase keys to snake_case for the DB.
+        const dbUpdates = {};
+        if (updates.title !== undefined) dbUpdates.title = updates.title;
+        if (updates.description !== undefined) dbUpdates.description = updates.description;
+        if (updates.category !== undefined) dbUpdates.category = updates.category;
+        if (updates.difficulty !== undefined) dbUpdates.difficulty = updates.difficulty;
+        if (updates.points !== undefined) dbUpdates.points = updates.points;
+        if (updates.deadline !== undefined) dbUpdates.deadline = updates.deadline;
+        if (updates.assignedTo !== undefined) dbUpdates.assigned_to = updates.assignedTo;
+        if (updates.requirements !== undefined) dbUpdates.requirements = updates.requirements;
+
+        const { error } = await supabase
+          .from("tasks")
+          .update(dbUpdates)
+          .eq("id", taskId);
+        if (error) throw error;
       } catch (e) {
-        console.warn("Supabase task update skipped:", e);
+        console.warn("Supabase task update failed, reverting:", e);
+        pushToast("Task update could not be saved.", "danger");
+        await syncLiveData(); // Revert optimistic state to DB truth.
+        return;
       }
       pushToast("Task updated successfully!");
     },
-    [pushToast],
+    [pushToast, syncLiveData],
   );
 
   const deleteTask = useCallback(
     async (taskId) => {
+      try {
+        // Delete the task first; if it succeeds, cascade-delete its
+        // submissions. This avoids orphaned tasks when the task delete
+        // fails after submissions are already gone.
+        const { error: taskErr } = await supabase
+          .from("tasks")
+          .delete()
+          .eq("id", taskId);
+        if (taskErr) throw taskErr;
+
+        await supabase.from("submissions").delete().eq("task_id", taskId);
+      } catch (e) {
+        console.warn("Supabase task delete failed:", e);
+        pushToast("Could not delete task from the database.", "danger");
+        await syncLiveData(); // Revert optimistic state.
+        return;
+      }
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
       setSubmissions((prev) => prev.filter((s) => s.taskId !== taskId));
-      try {
-        await supabase.from("submissions").delete().eq("task_id", taskId);
-        await supabase.from("tasks").delete().eq("id", taskId);
-      } catch (e) {
-        console.warn("Supabase task delete skipped:", e);
-      }
       pushToast("Task removed", "danger");
     },
-    [pushToast],
+    [pushToast, syncLiveData],
   );
 
   const submitTask = useCallback(
@@ -774,7 +784,11 @@ export function AppProvider({ children }) {
       try {
         let dbRes;
         if (payload?.file) {
-          dbRes = await submitDbTask(payload.file, taskId, effStudentId);
+          dbRes = await submitDbTask(payload.file, taskId, effStudentId, {
+            githubUrl: payload?.githubUrl || "",
+            liveUrl: payload?.liveUrl || "",
+            notes: payload?.notes || "",
+          });
         } else {
           const { data, error } = await supabase
             .from("submissions")
@@ -787,6 +801,9 @@ export function AppProvider({ children }) {
                   payload?.liveUrl ||
                   payload?.fileName ||
                   "",
+                github_url: payload?.githubUrl || "",
+                live_url: payload?.liveUrl || "",
+                notes: payload?.notes || "",
                 status: "pending",
               },
             ])
@@ -812,16 +829,16 @@ export function AppProvider({ children }) {
           return merged;
         }
       } catch (err) {
-        console.warn("Database submission skipped/failed, saved locally:", err);
+        console.warn("Database submission failed:", err);
       }
 
-      setSubmissions((prev) => [newSub, ...prev.filter((s) => s.id !== subId)]);
+      // DB insert failed — do NOT create a local-only submission. It would
+      // be invisible to the coordinator and disappear on reload.
       pushToast(
-        attempt > 1
-          ? "Resubmitted successfully!"
-          : "Task submitted successfully!",
+        "Could not save submission to the database. Check your connection and try again.",
+        "danger",
       );
-      return newSub;
+      return null;
     },
     [auth?.user?.id, pushToast],
   );
@@ -901,9 +918,12 @@ export function AppProvider({ children }) {
         };
         setAuth((prev) => (prev ? { ...prev, user: updatedUser } : prev));
         try {
+          // Persist both name and email to the profiles table so the change
+          // survives page reloads. Previously only name was saved here;
+          // email was applied to local state and silently lost on reload.
           await supabase
             .from("profiles")
-            .update({ name })
+            .update({ name, email })
             .eq("id", auth.user.id);
         } catch (e) {
           console.warn("Supabase profile update skipped:", e);
@@ -916,6 +936,13 @@ export function AppProvider({ children }) {
 
   const getStudent = useCallback(
     (id) => {
+      // When a real backend is configured, only return data from the DB
+      // (context state). Never fall back to mock data — it would show
+      // phantom students that don't exist in the database.
+      if (isSupabaseConfigured) {
+        return students.find((s) => s.id === id) || null;
+      }
+      // Demo mode: fall back to mock data.
       return (
         students.find((s) => s.id === id) ||
         getMockStudentById(id) || {
@@ -933,6 +960,10 @@ export function AppProvider({ children }) {
 
   const getTask = useCallback(
     (id) => {
+      // Same as getStudent: no mock fallback when the real backend is live.
+      if (isSupabaseConfigured) {
+        return tasks.find((t) => t.id === id) || null;
+      }
       return (
         tasks.find((t) => t.id === id) ||
         getMockTaskById(id) ||
@@ -945,15 +976,17 @@ export function AppProvider({ children }) {
   const persistNotifRead = useCallback(
     async (id) => {
       const userId = auth?.user?.id;
-      if (!userId || !isDbUuid(userId) || !isDbUuid(id)) return;
+      if (!userId || !isDbUuid(userId) || !isDbUuid(id)) return true; // local-only, no DB needed
       try {
-        await supabase
+        const { error } = await supabase
           .from("notifications")
           .update({ read: true })
           .eq("id", id)
           .eq("user_id", userId);
+        return !error;
       } catch (err) {
         console.warn("Failed to mark notification read:", err);
+        return false;
       }
     },
     [auth?.user?.id],
@@ -961,38 +994,47 @@ export function AppProvider({ children }) {
 
   const markNotifRead = useCallback(
     (role, id) => {
-      if (role === "student") {
-        setStudentNotifs((prev) =>
-          prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
-        );
-      } else {
-        setAdminNotifs((prev) =>
-          prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
-        );
-      }
-      persistNotifRead(id);
+      // Optimistic update: mark as read in UI immediately.
+      const setter = role === "student" ? setStudentNotifs : setAdminNotifs;
+      setter((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
+      );
+
+      // Persist to DB; revert if it fails so UI stays in sync with DB.
+      persistNotifRead(id).then((ok) => {
+        if (!ok) {
+          setter((prev) =>
+            prev.map((n) => (n.id === id ? { ...n, read: false } : n)),
+          );
+        }
+      });
     },
     [persistNotifRead],
   );
 
   const markAllNotifRead = useCallback(
     async (role) => {
-      if (role === "student") {
-        setStudentNotifs((prev) => prev.map((n) => ({ ...n, read: true })));
-      } else {
-        setAdminNotifs((prev) => prev.map((n) => ({ ...n, read: true })));
-      }
+      // Snapshot the current state so we can revert on DB failure.
+      const setter = role === "student" ? setStudentNotifs : setAdminNotifs;
+      let previousNotifs = [];
+      setter((prev) => {
+        previousNotifs = prev;
+        return prev.map((n) => ({ ...n, read: true }));
+      });
 
       const userId = auth?.user?.id;
       if (userId && isDbUuid(userId)) {
         try {
-          await supabase
+          const { error } = await supabase
             .from("notifications")
             .update({ read: true })
             .eq("user_id", userId)
             .eq("read", false);
+          if (error) throw error;
         } catch (err) {
           console.warn("Failed to mark all notifications read:", err);
+          // Revert to the snapshot so UI stays in sync with DB.
+          setter(previousNotifs);
         }
       }
     },

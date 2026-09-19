@@ -4,6 +4,7 @@ import { Github, Globe, Paperclip, Eye, Trash2 } from "lucide-react";
 import StatusBadge from "./StatusBadge";
 import { formatDateTime } from "../data/mockData";
 import { useApp } from "../context/AppContext";
+import { sanitizeUrl } from "../lib/sanitizeUrl";
 
 export default function SubmissionTable({ submissions, onRemove, emptyMessage = "No submissions found." }) {
   const navigate = useNavigate();

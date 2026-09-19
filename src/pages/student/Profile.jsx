@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Mail, Hash, GraduationCap, CalendarDays, Award, CheckCircle2, Save } from "lucide-react";
 import { useApp } from "../../context/AppContext";
 import ProgressBar from "../../components/ProgressBar";
+import { SkeletonCard } from "../../components/Skeleton";
 import { formatDate, getSubmissionStatusForTask } from "../../data/mockData";
 
 export default function Profile() {
@@ -9,7 +10,6 @@ export default function Profile() {
   const student = auth?.user || { name: "Student", email: "student@nexura.club", rollNo: "CS21B045", branch: "Computer Science", year: "3rd Year", joined: "2024-08-12", avatarColor: "#7C3AED" };
   const [name, setName] = useState(student.name || "");
   const [email, setEmail] = useState(student.email || "");
-
   const studentId = student.id || "s1";
   const myTasks = useMemo(
     () => tasks.filter((t) => !t.assignedTo || t.assignedTo.length === 0 || t.assignedTo.includes(studentId)),
@@ -17,6 +17,18 @@ export default function Profile() {
   );
   const approved = myTasks.filter((t) => getSubmissionStatusForTask(submissions, t.id, studentId) === "approved");
   const points = approved.reduce((sum, t) => sum + (t.points || 0), 0);
+
+  if (!auth) {
+    return (
+      <div className="max-w-3xl mx-auto space-y-6">
+        <SkeletonCard />
+        <div className="grid sm:grid-cols-2 gap-6">
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+      </div>
+    );
+  }
 
   const handleSave = (e) => {
     e.preventDefault();

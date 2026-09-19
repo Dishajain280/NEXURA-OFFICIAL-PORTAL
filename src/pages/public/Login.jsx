@@ -136,13 +136,7 @@ export default function Login() {
           </form>
 
           <p className="text-center text-sm text-nexura-300 mt-6">
-            Don't have an account?{" "}
-            <Link
-              to="/signup"
-              className="text-white font-semibold hover:underline"
-            >
-              Sign up
-            </Link>
+            Registration is closed. Contact your coordinator for access.
           </p>
         </div>
       </div>

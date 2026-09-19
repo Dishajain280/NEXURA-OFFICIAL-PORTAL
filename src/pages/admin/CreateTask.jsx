@@ -16,14 +16,16 @@ export default function CreateTask() {
   const [points, setPoints] = useState(100);
   const [deadline, setDeadline] = useState("");
   const [requirements, setRequirements] = useState(["", ""]);
-  const [assignedTo, setAssignedTo] = useState(() => students.map((s) => s.id));
+  const [assignedTo, setAssignedTo] = useState([]);
   const [errors, setErrors] = useState({});
 
+  // Always sync assignedTo with the current students list. This ensures
+  // that when DB data replaces mock data (after syncLiveData), the
+  // assignedTo array contains real UUIDs — not mock IDs like "s1" which
+  // would fail the DB's uuid[] column type.
   React.useEffect(() => {
     if (students && students.length > 0) {
-      setAssignedTo((prev) =>
-        prev.length === 0 ? students.map((s) => s.id) : prev,
-      );
+      setAssignedTo(students.map((s) => s.id));
     }
   }, [students]);
 
@@ -68,7 +70,8 @@ export default function CreateTask() {
 
     setSubmitting(true);
     try {
-      await createTask({
+      console.log("[CreateTask] Submitting:", { title: title.trim(), assignedTo, deadline });
+      const result = await createTask({
         title: title.trim(),
         category: FIXED_CATEGORY,
         description: description.trim(),
@@ -78,7 +81,13 @@ export default function CreateTask() {
         requirements: requirements.filter((r) => r.trim()),
         assignedTo,
       });
-      navigate("/coordinator/tasks");
+      console.log("[CreateTask] Result:", result);
+      // Only navigate if the task was actually created (result is not null).
+      // If createTask returns null, the DB insert failed and an error toast
+      // was already shown — stay on the form so the user can retry.
+      if (result) {
+        navigate("/coordinator/tasks");
+      }
     } catch (err) {
       setErrors({ form: err.message || "Failed to create task" });
     } finally {

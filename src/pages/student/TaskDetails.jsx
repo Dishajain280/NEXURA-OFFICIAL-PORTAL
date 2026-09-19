@@ -5,6 +5,7 @@ import { useApp } from "../../context/AppContext";
 import StatusBadge from "../../components/StatusBadge";
 import EmptyState from "../../components/EmptyState";
 import { formatDate, formatDateTime, daysUntil, getLatestSubmission, getSubmissionStatusForTask, isOverdue } from "../../data/mockData";
+import { sanitizeUrl } from "../../lib/sanitizeUrl";
 
 const DIFFICULTY_COLOR = {
   Beginner: "text-emerald-400 bg-emerald-500/10",
@@ -109,13 +110,13 @@ export default function TaskDetails() {
             {latestSub.githubUrl && (
               <div className="flex items-center gap-2.5 text-slate">
                 <Github className="w-4 h-4 text-nexura-400 shrink-0" />
-                <a href={latestSub.githubUrl} target="_blank" rel="noreferrer" className="text-nexura-300 hover:underline truncate">{latestSub.githubUrl}</a>
+                <a href={sanitizeUrl(latestSub.githubUrl)} target="_blank" rel="noopener noreferrer" className="text-nexura-300 hover:underline truncate">{latestSub.githubUrl}</a>
               </div>
             )}
             {latestSub.liveUrl && (
               <div className="flex items-center gap-2.5 text-slate">
                 <Globe className="w-4 h-4 text-nexura-400 shrink-0" />
-                <a href={latestSub.liveUrl} target="_blank" rel="noreferrer" className="text-nexura-300 hover:underline truncate">{latestSub.liveUrl}</a>
+                <a href={sanitizeUrl(latestSub.liveUrl)} target="_blank" rel="noopener noreferrer" className="text-nexura-300 hover:underline truncate">{latestSub.liveUrl}</a>
               </div>
             )}
           </div>

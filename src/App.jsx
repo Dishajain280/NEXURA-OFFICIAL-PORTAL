@@ -4,10 +4,10 @@ import { AppProvider, useApp } from "./context/AppContext";
 import { isCoordinatorRole } from "./lib/roleGuard";
 import ToastContainer from "./components/Toast";
 import ProtectedRoute from "./components/ProtectedRoute";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 import Landing from "./pages/public/Landing";
 import Login from "./pages/public/Login";
-import Signup from "./pages/public/Signup";
 
 import StudentLayout from "./layouts/StudentLayout";
 import StudentDashboard from "./pages/student/Dashboard";
@@ -52,21 +52,7 @@ function AppRoutes() {
           )
         }
       />
-      <Route
-        path="/signup"
-        element={
-          auth ? (
-            <Navigate
-              to={
-                isCoordinator ? "/coordinator/dashboard" : "/student/dashboard"
-              }
-              replace
-            />
-          ) : (
-            <Signup />
-          )
-        }
-      />
+      <Route path="/signup" element={<Navigate to="/login" replace />} />
 
       {/* Student */}
       <Route
@@ -154,11 +140,13 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <AppProvider>
-      <BrowserRouter>
-        <AppRoutes />
-        <ToastContainer />
-      </BrowserRouter>
-    </AppProvider>
+    <ErrorBoundary>
+      <AppProvider>
+        <BrowserRouter>
+          <AppRoutes />
+          <ToastContainer />
+        </BrowserRouter>
+      </AppProvider>
+    </ErrorBoundary>
   );
 }

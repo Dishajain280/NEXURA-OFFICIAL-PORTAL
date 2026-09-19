@@ -11,7 +11,7 @@ export default function SubmitTask() {
   const navigate = useNavigate();
   const task = tasks.find((t) => t.id === id);
 
-  const studentId = auth.user.id;
+  const studentId = auth?.user?.id || "s1";
   const status = task ? getSubmissionStatusForTask(submissions, task.id, studentId) : null;
   const latestSub = task ? getLatestSubmission(submissions, task.id, studentId) : null;
 
@@ -53,7 +53,11 @@ export default function SubmitTask() {
         { file, fileName: file?.name || "", githubUrl: githubUrl.trim(), liveUrl: liveUrl.trim(), notes: notes.trim() },
         newAttempt
       );
-      navigate(`/student/submissions/${sub.id}`);
+      if (sub) {
+        navigate(`/student/submissions/${sub.id}`);
+      } else {
+        setErrors({ form: "Submission could not be saved. Please try again." });
+      }
     } catch (err) {
       setErrors({ form: err.message || "Failed to submit task" });
     } finally {
